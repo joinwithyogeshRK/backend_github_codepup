@@ -10,12 +10,15 @@
   "dependencies": {
     "@azure/functions": "^4.0.0",
     "@azure/service-bus": "^7.9.5",
+    "@octokit/rest": "^22.0.0",
     "@prisma/client": "^6.14.0",
     "adm-zip": "^0.5.16",
     "cors": "^2.8.5",
     "dotenv": "^17.2.1",
     "fs": "^0.0.1-security",
+    "install": "^0.13.0",
     "node-fetch": "^3.3.2",
+    "npm": "^11.6.0",
     "path": "^0.12.7",
     "simple-git": "^3.28.0"
   },

@@ -62,7 +62,6 @@ const testGitHubToken = async (token, context) => {
         message: response.statusText,
       }));
 
-      // Handle rate limiting gracefully
       if (
         response.status === 403 &&
         error.message &&
@@ -87,7 +86,6 @@ const testGitHubToken = async (token, context) => {
     );
     return userData;
   } catch (error) {
-    // If it's a rate limit error in the catch, handle gracefully
     if (error.message.includes("rate limit")) {
       context.log.warn(
         "⚠️ Rate limit hit during token validation, proceeding without validation"
@@ -102,7 +100,7 @@ const testGitHubToken = async (token, context) => {
 
 const createRepoIfNotExists = async (token, repoName, username, context) => {
   try {
-    // First check if repo already exists
+    // Check if repo already exists
     context.log(`🔍 Checking if repository ${username}/${repoName} exists...`);
     const checkResponse = await fetch(
       `https://api.github.com/repos/${username}/${repoName}`,
@@ -125,7 +123,6 @@ const createRepoIfNotExists = async (token, repoName, username, context) => {
         message: checkResponse.statusText,
       }));
 
-      // Handle rate limiting during repository check
       if (
         checkResponse.status === 403 &&
         errorData.message &&
@@ -134,13 +131,7 @@ const createRepoIfNotExists = async (token, repoName, username, context) => {
         context.log.warn(
           "⚠️ Rate limit hit while checking repository existence. Proceeding with creation attempt..."
         );
-        // Continue to creation attempt
       } else {
-        context.log.error("❌ Unexpected error checking repository:", {
-          status: checkResponse.status,
-          statusText: checkResponse.statusText,
-          error: errorData,
-        });
         throw new Error(
           `Failed to check repository: ${
             errorData.message || checkResponse.statusText
@@ -169,19 +160,11 @@ const createRepoIfNotExists = async (token, repoName, username, context) => {
     const data = await response.json();
 
     if (!response.ok) {
-      context.log.error("❌ Repository creation failed:", {
-        status: response.status,
-        statusText: response.statusText,
-        error: data,
-      });
-
-      // Handle specific error cases
       if (response.status === 401) {
         throw new Error(
           "GitHub authentication failed. Please check your token."
         );
       } else if (response.status === 403) {
-        // Check if it's a rate limit issue
         if (data.message && data.message.includes("rate limit")) {
           throw new Error(
             `🚫 GitHub API rate limit exceeded. Please wait before trying again. ${data.message}`
@@ -191,25 +174,12 @@ const createRepoIfNotExists = async (token, repoName, username, context) => {
           "GitHub API access forbidden. Check token permissions (needs 'repo' scope)."
         );
       } else if (response.status === 422) {
-        // Log detailed error information
-        context.log.error("Detailed 422 error:", JSON.stringify(data, null, 2));
-
         if (data?.errors && Array.isArray(data.errors)) {
-          const errorMessages = data.errors
-            .map((err) => err.message || JSON.stringify(err))
-            .join("; ");
-          context.log.error("Specific validation errors:", errorMessages);
-
-          // Check for specific error types
           const hasNameExistsError = data.errors.some(
             (err) => err.message && err.message.includes("name already exists")
           );
 
           if (hasNameExistsError) {
-            // Repository actually exists, let's verify
-            context.log(
-              "🔄 Repository name already exists, verifying access..."
-            );
             const verifyResponse = await fetch(
               `https://api.github.com/repos/${username}/${repoName}`,
               {
@@ -232,18 +202,13 @@ const createRepoIfNotExists = async (token, repoName, username, context) => {
                 `Repository '${repoName}' exists but is not accessible. You might not have permission to access it.`
               );
             }
-          } else {
-            throw new Error(
-              `Repository creation validation failed: ${errorMessages}`
-            );
           }
-        } else {
-          throw new Error(
-            `Repository creation validation failed: ${
-              data.message || "Unknown validation error"
-            }`
-          );
         }
+        throw new Error(
+          `Repository creation validation failed: ${
+            data.message || "Unknown validation error"
+          }`
+        );
       } else {
         throw new Error(
           `Repository creation failed: ${data.message || response.statusText}`
@@ -264,7 +229,6 @@ async function downloadAndExtractZip(zipUrl, context) {
   const extractPath = path.join(TEMP_DIR, `unzipped-${Date.now()}`);
 
   try {
-    // Create temp directory if it doesn't exist
     if (!fs.existsSync(TEMP_DIR)) {
       context.log(`📁 Creating temp directory at: ${TEMP_DIR}`);
       fs.mkdirSync(TEMP_DIR, { recursive: true });
@@ -286,14 +250,10 @@ async function downloadAndExtractZip(zipUrl, context) {
     const zip = new AdmZip(zipPath);
     zip.extractAllTo(extractPath, true);
 
-    // Clean up zip file
     fs.unlinkSync(zipPath);
-
     return extractPath;
   } catch (error) {
     context.log.error("❌ Download/Extract error:", error.message);
-
-    // Clean up any partially created files
     try {
       if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
       if (fs.existsSync(extractPath))
@@ -301,7 +261,6 @@ async function downloadAndExtractZip(zipUrl, context) {
     } catch (cleanupError) {
       context.log.error("Cleanup error during failure:", cleanupError.message);
     }
-
     throw error;
   }
 }
@@ -319,7 +278,7 @@ function removeWorkflowFiles(dir, context) {
   return false;
 }
 
-// GitHub API-based upload function (no git required)
+// OPTIMIZED: Fast parallel upload with smart batching
 async function uploadToGitHubAPI(
   workingDir,
   token,
@@ -329,166 +288,10 @@ async function uploadToGitHubAPI(
 ) {
   const baseUrl = `https://api.github.com/repos/${username}/${repoName}/contents`;
 
-  // Verify repository exists and is accessible with retries
-  let repoAccessible = false;
-  let attempts = 0;
-  const maxAttempts = 3;
+  // Collect all files first
+  const allFiles = [];
 
-  while (!repoAccessible && attempts < maxAttempts) {
-    attempts++;
-    context.log(
-      `🔍 Verifying repository access (attempt ${attempts}/${maxAttempts})...`
-    );
-
-    const repoCheckResponse = await fetch(
-      `https://api.github.com/repos/${username}/${repoName}`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/vnd.github+json",
-        },
-      }
-    );
-
-    if (repoCheckResponse.ok) {
-      const repoData = await repoCheckResponse.json();
-      context.log(
-        `✅ Repository ${username}/${repoName} verified and accessible:`,
-        repoData.html_url
-      );
-      repoAccessible = true;
-    } else {
-      const error = await repoCheckResponse
-        .json()
-        .catch(() => ({ message: "Unknown error" }));
-
-      // Handle rate limiting during repository verification
-      if (
-        repoCheckResponse.status === 403 &&
-        error.message &&
-        error.message.includes("rate limit")
-      ) {
-        context.log.warn(
-          `⚠️ Rate limit hit during repository verification (attempt ${attempts}). Waiting longer...`
-        );
-        if (attempts < maxAttempts) {
-          await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5 seconds for rate limits
-          continue;
-        } else {
-          throw new Error(
-            `GitHub API rate limit exceeded during repository verification. Please try again later.`
-          );
-        }
-      }
-
-      context.log.error(`❌ Repository check failed (attempt ${attempts}):`, {
-        status: repoCheckResponse.status,
-        statusText: repoCheckResponse.statusText,
-        error: error,
-      });
-
-      if (attempts < maxAttempts) {
-        context.log(`⏰ Waiting 2 seconds before retry...`);
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-      } else {
-        throw new Error(
-          `Repository not accessible after ${maxAttempts} attempts: ${
-            error.message || repoCheckResponse.statusText
-          }`
-        );
-      }
-    }
-  }
-
-  async function uploadFile(filePath, relativePath) {
-    try {
-      const content = fs.readFileSync(filePath);
-      const base64Content = content.toString("base64");
-
-      // Check if file already exists
-      const checkUrl = `${baseUrl}/${relativePath}`;
-      const existingFileResponse = await fetch(checkUrl, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/vnd.github+json",
-        },
-      });
-
-      let sha = null;
-      if (existingFileResponse.ok) {
-        const existingFile = await existingFileResponse.json();
-        sha = existingFile.sha;
-        context.log(
-          `🔄 File ${relativePath} exists, will update with SHA: ${sha}`
-        );
-      }
-
-      const requestBody = {
-        message: `Upload ${relativePath}`,
-        content: base64Content,
-        committer: {
-          name: username,
-          email: `${username}@users.noreply.github.com`,
-        },
-        author: {
-          name: username,
-          email: `${username}@users.noreply.github.com`,
-        },
-      };
-
-      // Add SHA if file exists (for updates)
-      if (sha) {
-        requestBody.sha = sha;
-      }
-
-      const response = await fetch(checkUrl, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-          Accept: "application/vnd.github+json",
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({
-          message: response.statusText,
-        }));
-
-        // Handle rate limiting in file uploads
-        if (
-          response.status === 403 &&
-          error.message &&
-          error.message.includes("rate limit")
-        ) {
-          context.log.error(
-            `🚫 Rate limit hit while uploading ${relativePath}. Consider reducing upload frequency.`
-          );
-          throw new Error(
-            `GitHub API rate limit exceeded while uploading ${relativePath}. Please try again later.`
-          );
-        }
-
-        context.log.error(`❌ Failed to upload ${relativePath}:`, error);
-        throw new Error(
-          `Failed to upload ${relativePath}: ${
-            error.message || "Unknown error"
-          }`
-        );
-      }
-
-      return response.json();
-    } catch (error) {
-      context.log.error(
-        `❌ Error uploading file ${relativePath}:`,
-        error.message
-      );
-      throw error;
-    }
-  }
-
-  async function uploadDirectory(dir, basePath = "") {
+  function collectFiles(dir, basePath = "") {
     const items = fs.readdirSync(dir);
 
     for (const item of items) {
@@ -497,25 +300,162 @@ async function uploadToGitHubAPI(
       const stat = fs.statSync(itemPath);
 
       if (stat.isDirectory()) {
-        await uploadDirectory(itemPath, relativePath);
+        collectFiles(itemPath, relativePath);
       } else if (stat.isFile()) {
-        context.log(`⬆️ Uploading: ${relativePath}`);
-        await uploadFile(itemPath, relativePath);
-
-        // Add delay to avoid rate limiting (increased from 100ms to 500ms)
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        allFiles.push({ filePath: itemPath, relativePath });
       }
     }
   }
 
-  await uploadDirectory(workingDir);
+  collectFiles(workingDir);
+  context.log(`📊 Found ${allFiles.length} files to upload`);
+
+  // OPTIMIZED: Upload files in parallel batches
+  async function uploadFileBatch(fileBatch) {
+    const uploadPromises = fileBatch.map(async ({ filePath, relativePath }) => {
+      try {
+        const content = fs.readFileSync(filePath);
+        const base64Content = content.toString("base64");
+
+        const requestBody = {
+          message: `Upload ${relativePath}`,
+          content: base64Content,
+          committer: {
+            name: username,
+            email: `${username}@users.noreply.github.com`,
+          },
+          author: {
+            name: username,
+            email: `${username}@users.noreply.github.com`,
+          },
+        };
+
+        const uploadUrl = `${baseUrl}/${relativePath}`;
+        const response = await fetch(uploadUrl, {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            Accept: "application/vnd.github+json",
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({
+            message: response.statusText,
+          }));
+
+          // If file exists, get SHA and retry
+          if (
+            response.status === 422 &&
+            error.message &&
+            error.message.includes("sha")
+          ) {
+            const existingFileResponse = await fetch(uploadUrl, {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: "application/vnd.github+json",
+              },
+            });
+
+            if (existingFileResponse.ok) {
+              const existingFile = await existingFileResponse.json();
+              requestBody.sha = existingFile.sha;
+
+              const retryResponse = await fetch(uploadUrl, {
+                method: "PUT",
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  "Content-Type": "application/json",
+                  Accept: "application/vnd.github+json",
+                },
+                body: JSON.stringify(requestBody),
+              });
+
+              if (!retryResponse.ok) {
+                const retryError = await retryResponse.json().catch(() => ({
+                  message: retryResponse.statusText,
+                }));
+                throw new Error(
+                  `Failed to update ${relativePath}: ${retryError.message}`
+                );
+              }
+
+              context.log(`✅ Updated: ${relativePath}`);
+              return retryResponse.json();
+            }
+          }
+
+          if (
+            response.status === 403 &&
+            error.message &&
+            error.message.includes("rate limit")
+          ) {
+            throw new Error(`Rate limit hit for ${relativePath}`);
+          }
+
+          throw new Error(`Failed to upload ${relativePath}: ${error.message}`);
+        }
+
+        context.log(`✅ Created: ${relativePath}`);
+        return response.json();
+      } catch (error) {
+        context.log.error(`❌ Error uploading ${relativePath}:`, error.message);
+        throw error;
+      }
+    });
+
+    return Promise.all(uploadPromises);
+  }
+
+  // Process files in batches of 10 (optimized batch size)
+  const BATCH_SIZE = 10;
+  const totalBatches = Math.ceil(allFiles.length / BATCH_SIZE);
+
+  for (let i = 0; i < allFiles.length; i += BATCH_SIZE) {
+    const currentBatch = Math.floor(i / BATCH_SIZE) + 1;
+    const batch = allFiles.slice(i, i + BATCH_SIZE);
+
+    context.log(
+      `⚡ Processing batch ${currentBatch}/${totalBatches} (${batch.length} files)`
+    );
+
+    try {
+      await uploadFileBatch(batch);
+      context.log(`✅ Batch ${currentBatch} completed successfully`);
+
+      // Only add delay between batches (not between individual files)
+      // And only if there are more batches to process
+      if (i + BATCH_SIZE < allFiles.length) {
+        context.log("⏰ Brief pause between batches...");
+        await new Promise((resolve) => setTimeout(resolve, 200)); // Reduced to 200ms
+      }
+    } catch (error) {
+      // If batch fails due to rate limit, wait longer and retry
+      if (error.message.includes("rate limit")) {
+        context.log.warn(
+          `⚠️ Rate limit hit in batch ${currentBatch}, waiting 2 seconds...`
+        );
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+
+        // Retry the failed batch
+        context.log(`🔄 Retrying batch ${currentBatch}...`);
+        await uploadFileBatch(batch);
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  context.log(`🎉 All ${allFiles.length} files uploaded successfully!`);
 }
 
 async function upload(zipUrl, repoName, token, username, context) {
   let extractPath;
 
   try {
-    // Clean up any old temp files older than 1 hour
+    // Clean up old temp files
     try {
       const now = Date.now();
       const oneHour = 60 * 60 * 1000;
@@ -571,11 +511,7 @@ async function upload(zipUrl, repoName, token, username, context) {
     context.log("🏗️ Creating repository if it doesn't exist...");
     await createRepoIfNotExists(token, repoName, username, context);
 
-    // Add a small delay to ensure repo is fully created
-    context.log("⏰ Waiting for repository to be ready...");
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-
-    context.log("🚀 Uploading files via GitHub API...");
+    context.log("🚀 Uploading files via optimized GitHub API...");
     await uploadToGitHubAPI(workingDir, token, username, repoName, context);
 
     context.log("🎉 Upload completed successfully!");
@@ -587,11 +523,6 @@ async function upload(zipUrl, repoName, token, username, context) {
       context.log.error(
         "ERROR: GitHub token needs 'workflow' scope to upload GitHub Actions files"
       );
-      context.log.error("SOLUTIONS:");
-      context.log.error(
-        "1. Update your GitHub token to include 'workflow' scope"
-      );
-      context.log.error("2. Remove .github/workflows/ files from your zip");
     }
 
     if (err.message.includes("Repository not found")) {
@@ -664,10 +595,8 @@ export default async function (context, mySbMsg) {
       throw new Error(`Missing required fields: ${missing.join(", ")}`);
     }
 
-    // Use the simple validation function
     const validatedRepoName = validateRepositoryName(repoName);
 
-    // Validate GitHub token format
     if (!authToken.startsWith("ghp_") && !authToken.startsWith("github_pat_")) {
       context.log.warn(
         "⚠️ Token doesn't match expected GitHub format. This might cause authentication issues."
@@ -676,11 +605,9 @@ export default async function (context, mySbMsg) {
 
     context.log(`🚀 Processing: ${validatedRepoName} by ${username}`);
 
-    // Test GitHub token before proceeding (with rate limit handling)
     context.log("🔐 Validating GitHub token...");
     const githubUser = await testGitHubToken(authToken, context);
 
-    // Only verify username match if we got a real user (not rate limited)
     if (!githubUser.rateLimit && githubUser.login !== "rate-limited-user") {
       if (githubUser.login.toLowerCase() !== username.toLowerCase()) {
         throw new Error(
@@ -703,7 +630,6 @@ export default async function (context, mySbMsg) {
 
     context.log(`✅ Upload completed: ${repoUrl}`);
 
-    // Return success for Service Bus
     return {
       success: true,
       repoUrl: repoUrl,
