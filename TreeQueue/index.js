@@ -319,13 +319,13 @@ export default async function (context, req) {
 
   const helloTree = async () => {
     const repo = await octokit.request("POST /user/repos", {
-      name: "gurani_yogesh_test_repo_207",
+      name: "gurani_yogesh_test_repo_209",
       private: true,
       auto_init: true,
     });
 
     const ref = await octokit.request(
-      "GET /repos/joinwithyogeshRK/gurani_yogesh_test_repo_207/git/ref/heads/main"
+      "GET /repos/joinwithyogeshRK/gurani_yogesh_test_repo_209/git/ref/heads/main"
     );
 
     // This gives you the latest commit SHA (parent commit)
@@ -342,14 +342,14 @@ export default async function (context, req) {
     }));
 
     const responsetreesha = await octokit.request(
-      "POST /repos/joinwithyogeshRK/gurani_yogesh_test_repo_207/git/trees",
+      "POST /repos/joinwithyogeshRK/gurani_yogesh_test_repo_209/git/trees",
       {
         tree,
       }
     );
 
     const responsecommitsha = await octokit.request(
-      "POST /repos/joinwithyogeshRK/gurani_yogesh_test_repo_207/git/commits",
+      "POST /repos/joinwithyogeshRK/gurani_yogesh_test_repo_209/git/commits",
       {
         message: "successful initial commit",
         tree: responsetreesha.data.sha,
@@ -358,7 +358,7 @@ export default async function (context, req) {
     );
 
     const response = await octokit.request(
-      "PATCH /repos/joinwithyogeshRK/gurani_yogesh_test_repo_207/git/refs/heads/main",
+      "PATCH /repos/joinwithyogeshRK/gurani_yogesh_test_repo_209/git/refs/heads/main",
       {
         sha: responsecommitsha.data.sha,
       }
