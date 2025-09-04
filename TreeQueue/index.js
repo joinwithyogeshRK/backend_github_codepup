@@ -319,7 +319,7 @@ export default async function (context, req) {
 
   const helloTree = async () => {
     const repo = await octokit.request("POST /user/repos", {
-      name: "gurani_yogesh_test_repo_207",
+      name: "gurani_yogesh_test_repo_205",
       private: true,
       auto_init: true,
     });
